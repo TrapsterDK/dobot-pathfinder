@@ -9,24 +9,41 @@ import cv2
 np.set_printoptions(threshold=np.inf)
 
 class Camera():
-    def __init__(self, cam_id):
-        print('Camera starting')
-        self.cam = cv2.VideoCapture(cam_id)
+    def __init__(self, cam_id_or_img):
+        match cam_id_or_img:
+            case int():
+                print('Camera starting')
+                self.cam = cv2.VideoCapture(cam_id_or_img)
+
+            case str():
+                print('Image starting')
+                self.cam = cv2.imread(cam_id_or_img)
+
+            case _: 
+                raise Exception('Invalid argument for camera')
+
 
     def __enter__(self):
         return self
         
     def __exit__(self, exc_type, exc_value, traceback):
-        print('Camera exiting')
-        self.cam.release()
-        cv2.destroyAllWindows()
+        if isinstance(self.cam, cv2.VideoCapture):
+            print('Camera exiting')
+            self.cam.release()
+        else:
+            print('Image exiting')
 
     def grap_frame(self):
-        ret, frame = self.cam.read()
-        if not ret:
-            print("Failed to grab frame")
-            return
-        return frame.copy()
+
+        if isinstance(self.cam, cv2.VideoCapture):
+            ret, frame = self.cam.read()
+            if not ret:
+                print("Failed to grab frame")
+                return
+            return frame.copy()
+        else:
+            return self.cam.copy()
+        
     
     def frame_edges(self):
         frame = self.grap_frame()
@@ -114,7 +131,7 @@ class Camera():
     def combined_all(self):
         frame = self.grap_frame()
         edges = self.frame_edges()
-        edges = self.thick(edges, 30, 30)
+        edges = self.thick(edges, 3, 3)
 
         red_mass = self.center_of_mass(self.frame_red())
         blue_mass = self.center_of_mass(self.frame_blue())
@@ -122,11 +139,11 @@ class Camera():
 
         #combine the images
         if red_mass is not None:
-            cv2.circle(frame, red_mass, 7, (255, 255, 255), -1)
+            cv2.circle(frame, red_mass, 7, (0, 255, 0), -1)
         if blue_mass is not None:
-            cv2.circle(frame, blue_mass, 7, (255, 255, 255), -1)
+            cv2.circle(frame, blue_mass, 7, (0, 0, 255), -1)
         if green_mass is not None:
-            cv2.circle(frame, green_mass, 7, (255, 255, 255), -1)
+            cv2.circle(frame, green_mass, 7, (255, 0, 0), -1)
 
         # edges borders over the frame
         frame[edges != 0] = (0, 0, 255)
@@ -189,68 +206,68 @@ class TreePathfinder():
     def __exit__(self, exc_type, exc_value, traceback):
         print('TreePathfinder exiting')
 
-    def check_point_collision(self, image, point: tuple[int, int]):
-        if not (0 <= point[0] < image.shape[0] and 0 <= point[1] < image.shape[1]):
-            #print(1)
-            return True
-        
-        #print(2)
-        #print(image[point[0], point[1]], image[point[1], point[0]])
+    #check if point colides with in the image
+    def check_collision(self, image, point):
+        #check if point is in the image
+        if not (0 <= point[0] < image.shape[1]) or not (0 <= point[1] < image.shape[0]):
+            return False
+
         return image[point[1], point[0]]
-    
-    def find_path(self, image, start_point: tuple[int, int], end_point: tuple[int, int]):
+
+    # find the path from start to end  
+    def find_path(self, image, start, end):
         image = Camera.thick(image, 30, 30)
+
+        # show the image
+        cv2.namedWindow("Accept Y or cancel N")
+        while True:
+            cv2.imshow("Accept Y or cancel N", image)
+            
+            k = cv2.waitKey(1)
+            if k%256 == 27 or k%256 == ord('q'):
+                print("Escape hit, closing window")
+                break
+            
+        cv2.destroyAllWindows()
+            
         image = np.asarray(image, dtype=bool)
-        #print(image)
 
-        # check if the start and end point is valid
-        if self.check_point_collision(image, start_point):
-            print("Start point is in collision")
+        #check if start and end is in the image
+        if self.check_collision(image, start):
+            print("Start is not in the image")
             return None
-
-        if self.check_point_collision(image, end_point):
-            print("End point is in collision")
+        
+        if self.check_collision(image, end):
+            print("End is not in the image")
             return None
-
-        # find the path
+        
         path = []
-        current_point = start_point
-        max_tries = 10000
-        while current_point != end_point:
-            max_tries -= 1
-            print(max_tries)
-            if max_tries <= 0:
-                print("To many tries")
+        current = start
+        max_a = 2000
+        while current != end:
+            max_a-=1
+            if max_a < 0:
+                print("Max a reached")
                 return path
 
-            path.append(current_point)
-
-            # find the next point
-            next_point = None
-            for x in range(-1, 2):
-                for y in range(-1, 2):
-                    if x == 0 and y == 0:
-                        continue
-
-                    new_point = (current_point[0] + x, current_point[1] + y)
-                    if not self.check_point_collision(image, new_point):
-                        next_point = new_point
-                        break
-
-                if next_point is not None:
-                    break
-
-            if next_point is None:
-                print("No path found")
-                return None
-
-            current_point = next_point
+            path.append(current)
+            if not self.check_collision(image, (current[0] + 1, current[1])):
+                current = (current[0] + 1, current[1])
+            elif not self.check_collision(image, (current[0] - 1, current[1])):
+                current = (current[0] - 1, current[1])
+            elif not self.check_collision(image, (current[0], current[1] + 1)):
+                current = (current[0], current[1] + 1)
+            elif not self.check_collision(image, (current[0], current[1] - 1)):
+                current = (current[0], current[1] - 1)
+            else:
+                return path
 
         return path
         
 
+
 if __name__ == '__main__':
-    with Camera(1) as camera:
+    with Camera("lol.png") as camera:
         #with Robot() as robot:
         robot = None
         with TreePathfinder() as pathfinder:
@@ -260,7 +277,7 @@ if __name__ == '__main__':
                     case "exit" | "e" | "quit" | "q":   
                         break
                     case "show" | "s":
-                        input_show = input("Show (r, g, b, (edge, e)): ")
+                        input_show = input("Show (r, g, b, (edge, e), (all, a)): ")
                         match input_show:
                             case "r":
                                 camera.display_capture(camera.frame_red)
@@ -292,11 +309,12 @@ if __name__ == '__main__':
                         image = camera.grap_frame()
 
                         # draw the path
+                        print(path)
                         for point in path:
-                            image[point[0], point[1]] = (0, 255, 0)
+                            image[point[1], point[0]] = (0, 255, 0)
                         
                         cv2.imshow("Path", image)
-                        k = cv2.waitKey(1)
+                        cv2.waitKey(0) 
                         
                     case _:
                         print("Invalid input")
