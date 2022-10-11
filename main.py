@@ -5,6 +5,7 @@ from serial.tools import list_ports
 import numpy as np
 import pydobot
 import cv2
+import pyastar2d
 
 np.set_printoptions(threshold=np.inf)
 
@@ -195,129 +196,83 @@ class Robot(pydobot.Dobot):
         print('Robot exiting')
         self.close()
 
-class TreePathfinder():
-    def __init__(self) -> None:
-        pass
 
-    def __enter__(self):
-        print("TreePathfinder starting")
-        return self
+# find the path from start to end  
+def find_path(image, start, end):
+    image = Camera.thick(image, 30, 30)
 
-    def __exit__(self, exc_type, exc_value, traceback):
-        print('TreePathfinder exiting')
-
-    #check if point colides with in the image
-    def check_collision(self, image, point):
-        #check if point is in the image
-        if not (0 <= point[0] < image.shape[1]) or not (0 <= point[1] < image.shape[0]):
-            return False
-
-        return image[point[1], point[0]]
-
-    # find the path from start to end  
-    def find_path(self, image, start, end):
-        image = Camera.thick(image, 30, 30)
-
-        # show the image
-        cv2.namedWindow("Accept Y or cancel N")
-        while True:
-            cv2.imshow("Accept Y or cancel N", image)
-            
-            k = cv2.waitKey(1)
-            if k%256 == 27 or k%256 == ord('q'):
-                print("Escape hit, closing window")
-                break
-            
-        cv2.destroyAllWindows()
-            
-        image = np.asarray(image, dtype=bool)
-
-        #check if start and end is in the image
-        if self.check_collision(image, start):
-            print("Start is not in the image")
-            return None
+    # show the image
+    while True:
+        cv2.imshow("Accept Y or cancel N", image)
         
-        if self.check_collision(image, end):
-            print("End is not in the image")
-            return None
-        
-        path = []
-        current = start
-        max_a = 2000
-        while current != end:
-            max_a-=1
-            if max_a < 0:
-                print("Max a reached")
-                return path
+        k = cv2.waitKey(1)
+        if k%256 == 27 or k%256 == ord('q') or k%256 == ord('n'):
+            print("Cancellig path finding")
+            break
+        elif k%256 == ord('y'):
+            print("Finding path")
+            break
 
-            path.append(current)
-            if not self.check_collision(image, (current[0] + 1, current[1])):
-                current = (current[0] + 1, current[1])
-            elif not self.check_collision(image, (current[0] - 1, current[1])):
-                current = (current[0] - 1, current[1])
-            elif not self.check_collision(image, (current[0], current[1] + 1)):
-                current = (current[0], current[1] + 1)
-            elif not self.check_collision(image, (current[0], current[1] - 1)):
-                current = (current[0], current[1] - 1)
-            else:
-                return path
+    cv2.destroyAllWindows()
+    
+    # process the image
+    maze = image.astype(np.float32)
+    maze[maze == 0] = 1
+    maze[maze == 255] = np.inf
 
-        return path
-        
+    return pyastar2d.astar_path(maze, start[::-1], end[::-1], allow_diagonal=False)
 
 
 if __name__ == '__main__':
     with Camera("lol.png") as camera:
         #with Robot() as robot:
         robot = None
-        with TreePathfinder() as pathfinder:
-            while True:
-                input_var = input("Command: ")
-                match input_var:
-                    case "exit" | "e" | "quit" | "q":   
-                        break
-                    case "show" | "s":
-                        input_show = input("Show (r, g, b, (edge, e), (all, a)): ")
-                        match input_show:
-                            case "r":
-                                camera.display_capture(camera.frame_red)
-                            case "g":
-                                camera.display_capture(camera.frame_green)
-                            case "b":
-                                camera.display_capture(camera.frame_blue)
-                            case "edge" | "e":
-                                camera.display_capture(camera.frame_edges)
-                            case "all" | "a":
-                                camera.display_capture(camera.combined_all)
-                            case _:
-                                print("Invalid input")
-                    case "move" | "m":
-                        input_move = input("Move x, y, z, r: ")
-                        s_input = input_move.split(",")
-                        robot.move_to(x=float(s_input[0]), y=float(s_input[1]), z=float(s_input[2]), r=float(s_input[3]), wait=False)
-                    case "path" | "p":
-                        cx_start, cy_start = camera.center_of_mass(camera.frame_red())
-                        cx_end, cy_end = camera.center_of_mass(camera.frame_blue())
+        while True:
+            input_var = input("Command: ")
+            match input_var:
+                case "exit" | "e" | "quit" | "q":   
+                    break
+                case "show" | "s":
+                    input_show = input("Show (r, g, b, (edge, e), (all, a)): ")
+                    match input_show:
+                        case "r":
+                            camera.display_capture(camera.frame_red)
+                        case "g":
+                            camera.display_capture(camera.frame_green)
+                        case "b":
+                            camera.display_capture(camera.frame_blue)
+                        case "edge" | "e":
+                            camera.display_capture(camera.frame_edges)
+                        case "all" | "a":
+                            camera.display_capture(camera.combined_all)
+                        case _:
+                            print("Invalid input")
+                case "move" | "m":
+                    input_move = input("Move x, y, z, r: ")
+                    s_input = input_move.split(",")
+                    robot.move_to(x=float(s_input[0]), y=float(s_input[1]), z=float(s_input[2]), r=float(s_input[3]), wait=False)
+                case "path" | "p":
+                    cx_start, cy_start = camera.center_of_mass(camera.frame_red())
+                    cx_end, cy_end = camera.center_of_mass(camera.frame_blue())
 
-                        path = pathfinder.find_path(camera.frame_edges(), (cx_start, cy_start), (cx_end, cy_end))
+                    path = find_path(camera.frame_edges(), (cx_start, cy_start), (cx_end, cy_end))
 
-                        if path is None:
-                            print("No path found")
-                            continue
-                        
-                        # display the path as image
-                        image = camera.grap_frame()
+                    if path is None:
+                        print("No path found")
+                        continue
+                    
+                    # display the path as image
+                    image = camera.grap_frame()
 
-                        # draw the path
-                        print(path)
-                        for point in path:
-                            image[point[1], point[0]] = (0, 255, 0)
-                        
-                        cv2.imshow("Path", image)
-                        cv2.waitKey(0) 
-                        
-                    case _:
-                        print("Invalid input")
+                    # draw the path
+                    for point in path:
+                        image[point[0], point[1]] = (0, 255, 0)
+                    
+                    cv2.imshow("Path", image)
+                    cv2.waitKey(1) 
+                    
+                case _:
+                    print("Invalid input")
 
 
 '''
