@@ -5,7 +5,9 @@ from serial.tools import list_ports
 import numpy as np
 import pydobot
 import cv2
-import pyastar2d
+from pathfinding.core.diagonal_movement import DiagonalMovement
+from pathfinding.core.grid import Grid
+from pathfinding.finder.a_star import AStarFinder
 
 np.set_printoptions(threshold=np.inf)
 
@@ -35,7 +37,6 @@ class Camera():
             print('Image exiting')
 
     def grap_frame(self):
-
         if isinstance(self.cam, cv2.VideoCapture):
             ret, frame = self.cam.read()
             if not ret:
@@ -45,12 +46,12 @@ class Camera():
         else:
             return self.cam.copy()
         
-    
-    def frame_edges(self):
-        frame = self.grap_frame()
-        
+    @staticmethod
+    def frame_edges(image):
+        image = image.copy()
+
         # convert to hsv to get gray color
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
 
         # gray color mask
         lower_gray = np.array([0,0,0])
@@ -63,12 +64,12 @@ class Camera():
 
         return edges
         
-
-    def frame_red(self):
-        frame = self.grap_frame()
+    @staticmethod
+    def frame_red(image):
+        image = image.copy()
 
         # hsv color select red colors
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         lower_red = np.array([0,50,50])
         upper_red = np.array([10,255,255])
         mask1 = cv2.inRange(hsv, lower_red, upper_red)
@@ -81,30 +82,32 @@ class Camera():
 
         return mask
 
-    def frame_blue(self):
-        frame = self.grap_frame()
+    @staticmethod
+    def frame_blue(image):
+        image = image.copy()
 
         # hsv color select blue colors
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         lower_blue = np.array([100,50,50])
         upper_blue = np.array([130,255,255])
         mask = cv2.inRange(hsv, lower_blue, upper_blue)
 
         return mask
 
-    def frame_green(self):
-        frame = self.grap_frame()
+    @staticmethod
+    def frame_green(image):
+        image = image.copy()
 
         # hsv color select green colors
-        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
         lower_green = np.array([40,50,50])
         upper_green = np.array([80,255,255])
         mask = cv2.inRange(hsv, lower_green, upper_green)
 
         return mask
 
-        
-    def center_of_mass(self, image):
+    @staticmethod
+    def center_of_mass(image):
         # find contours in the binary image
         contours, hierarchy = cv2.findContours(image, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
@@ -129,33 +132,36 @@ class Camera():
 
         return (cx, cy)
 
-    def combined_all(self):
-        frame = self.grap_frame()
-        edges = self.frame_edges()
-        edges = self.thick(edges, 3, 3)
+    @staticmethod
+    def combined_all(image):
+        image = image.copy()
 
-        red_mass = self.center_of_mass(self.frame_red())
-        blue_mass = self.center_of_mass(self.frame_blue())
-        green_mass = self.center_of_mass(self.frame_green())
+        edges = Camera.frame_edges(image)
+        edges = Camera.thick(edges, 3, 3)
+
+        red_mass = Camera.center_of_mass(Camera.frame_red(image))
+        blue_mass = Camera.center_of_mass(Camera.frame_blue(image))
+        green_mass = Camera.center_of_mass(Camera.frame_green(image))
 
         #combine the images
         if red_mass is not None:
-            cv2.circle(frame, red_mass, 7, (0, 255, 0), -1)
+            cv2.circle(image, red_mass, 7, (0, 255, 0), -1)
         if blue_mass is not None:
-            cv2.circle(frame, blue_mass, 7, (0, 0, 255), -1)
+            cv2.circle(image, blue_mass, 7, (0, 0, 255), -1)
         if green_mass is not None:
-            cv2.circle(frame, green_mass, 7, (255, 0, 0), -1)
+            cv2.circle(image, green_mass, 7, (255, 0, 0), -1)
 
         # edges borders over the frame
-        frame[edges != 0] = (0, 0, 255)
+        image[edges != 0] = (0, 0, 255)
 
-        return frame
+        return image
 
     def display_capture(self, image_func):
         print("Press q or esc to quit")
         cv2.namedWindow("Video")
+        cv2.setWindowProperty("Video", cv2.WND_PROP_TOPMOST, 1)
         while True:
-            cv2.imshow("Video", image_func())
+            cv2.imshow("Video", image_func(self.grap_frame()))
             
             k = cv2.waitKey(1)
             if k%256 == 27 or k%256 == ord('q'):
@@ -198,17 +204,39 @@ class Robot(pydobot.Dobot):
 
 
 # find the path from start to end  
-def find_path(image, start, end):
-    image = Camera.thick(image, 30, 30)
+def find_path(image, cube_width=50, cube_height=50):  
+    edges = Camera.frame_edges(image)
+    start = Camera.center_of_mass(Camera.frame_red(image))
+    end = Camera.center_of_mass(Camera.frame_blue(image))
+
+    if start is None:
+        print("No start found")
+        return None
+
+    if end is None:
+        print("No end found")
+        return None
 
     # show the image
+    display_image = image.copy()
+
+    edges3 = Camera.thick(edges, 3, 3)
+    display_image[edges3 != 0] = (0, 255, 0)
+
+    cv2.circle(display_image, start, 7, (255, 255, 255), -1)
+    cv2.circle(display_image, end, 7, (255, 255, 255), -1)
+
+    # display in window that is in foreground
+    cv2.namedWindow("Accept Y or cancel N")
+    cv2.setWindowProperty("Accept Y or cancel N", cv2.WND_PROP_TOPMOST, 1)
     while True:
-        cv2.imshow("Accept Y or cancel N", image)
+        cv2.imshow("Accept Y or cancel N", display_image)
         
         k = cv2.waitKey(1)
         if k%256 == 27 or k%256 == ord('q') or k%256 == ord('n'):
             print("Cancellig path finding")
-            break
+            return
+
         elif k%256 == ord('y'):
             print("Finding path")
             break
@@ -216,11 +244,23 @@ def find_path(image, start, end):
     cv2.destroyAllWindows()
     
     # process the image
-    maze = image.astype(np.float32)
-    maze[maze == 0] = 1
-    maze[maze == 255] = np.inf
+    thick_edges = Camera.thick(edges, cube_width, cube_height)
 
-    return pyastar2d.astar_path(maze, start[::-1], end[::-1], allow_diagonal=False)
+    # display the image
+    grid = Grid(matrix=np.invert(thick_edges.astype(bool)))
+    start = grid.node(start[0], start[1])
+    end = grid.node(end[0], end[1])
+
+    finder = AStarFinder(diagonal_movement=DiagonalMovement.always)
+    path, runs = finder.find_path(start, end, grid)
+
+    return path
+
+def path_to_mask(path, shape):
+    mask = np.zeros(shape, dtype=np.uint8)
+    for point in path:
+        mask[point[1], point[0]] = 255
+    return mask
 
 
 if __name__ == '__main__':
@@ -252,24 +292,39 @@ if __name__ == '__main__':
                     s_input = input_move.split(",")
                     robot.move_to(x=float(s_input[0]), y=float(s_input[1]), z=float(s_input[2]), r=float(s_input[3]), wait=False)
                 case "path" | "p":
-                    cx_start, cy_start = camera.center_of_mass(camera.frame_red())
-                    cx_end, cy_end = camera.center_of_mass(camera.frame_blue())
-
-                    path = find_path(camera.frame_edges(), (cx_start, cy_start), (cx_end, cy_end))
+                    image = camera.grap_frame()
+                    path = find_path(image)
 
                     if path is None:
                         print("No path found")
                         continue
                     
                     # display the path as image
-                    image = camera.grap_frame()
+                    path_mask = path_to_mask(path, image.shape[:2])
+                    path_mask = Camera.thick(path_mask, 3, 3)
 
-                    # draw the path
-                    for point in path:
-                        image[point[0], point[1]] = (0, 255, 0)
+                    display_image = image.copy()
+                    display_image[path_mask != 0] = (0, 255, 0)
+
                     
-                    cv2.imshow("Path", image)
-                    cv2.waitKey(1) 
+                    cv2.namedWindow("Path q to cancel, y to execute")
+                    cv2.setWindowProperty("Path q to cancel, y to execute", cv2.WND_PROP_TOPMOST, 1)
+                    while True:
+                        cv2.imshow("Path q to cancel, y to execute", display_image)
+                        
+                        k = cv2.waitKey(1)
+                        if k%256 == 27 or k%256 == ord('q') or k%256 == ord('n'):
+                            print("Not executing path")
+                            break
+
+                        elif k%256 == ord('y'):
+                            print("Executing path")
+
+                            for point in path:
+                                robot.move_to(x=point[0], y=point[1], z=30, r=0, wait=True)
+                            break
+
+                    cv2.destroyAllWindows()
                     
                 case _:
                     print("Invalid input")
